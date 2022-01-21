@@ -14,150 +14,148 @@ import kotlinx.coroutines.experimental.channels.Channel
 import kotlinx.coroutines.experimental.channels.consumeEach
 import mu.KotlinLogging
 import ua.org.kug.raft.RequestAppendEntriesRPC.LogEntry
-import ua.org.kug.raft.State.*
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.fixedRateTimer
 
 
-enum class State {
-    FOLLOWER, CANDIDATE, LEADER
+enum class Estados {
+    SEGUIDOR, CANDIDATO, LIDER
 }
 
-class RaftServer(val id: Int, val servers: List<RaftClient>) :
+class RaftServer(val id: Int, val servidores: List<RaftClient>) :
         RaftGrpcKt.RaftImplBase(
                 coroutineContext = newFixedThreadPoolContext(4, "server-pool"),
                 sendChannelCapacity = 4) {
 
-    val kLogger = KotlinLogging.logger("server")
+    val kLogger = KotlinLogging.logger("Servidor")
 
     @Volatile
-    var currentTerm = 0
+    var termoAtual = 0
 
     @Volatile
-    var votedFor = -1
+    var votadoEm = -1
 
     @Volatile
-    var state = FOLLOWER
+    var estado = Estados.SEGUIDOR
 
-    private val majority = servers.size / 2 + 1
+    private val maioria = servidores.size / 2 + 1
 
     private var commitIndex = 0
-    var lastApplied = 0
+
     private val log = Log<LogEntry>()
 
-    private val channel = Channel<State>()
+    private val canal = Channel<Estados>()
 
     init {
         ktorServer()
 
-        kLogger.info { "Server $id is in $state at term $currentTerm" }
+        kLogger.info { "Servidor $id é dentro $estado no termo $termoAtual" }
 
-        val waitingForHeartbeat = waitingForHeartbeatFromLeaderTimer()
+        val aguardandoEstadoDoLider = aguardandoEstadoDoLider()
 
         launch {
-            channel.consumeEach {
+            canal.consumeEach {
                 when (it) {
-                    FOLLOWER -> waitingForHeartbeat.reset()
-                    CANDIDATE -> leaderElection()
-                    LEADER -> appendRequestAndLeaderHeartbeat()
+                    Estados.SEGUIDOR -> aguardandoEstadoDoLider.resetar()
+                    Estados.CANDIDATO -> eleicaoLider()
+                    Estados.LIDER -> anexarPedidoEstadoDoLider()
                 }
             }
         }
     }
 
     private fun ktorServer() {
-        val server = embeddedServer(Netty, port = 7000 + id) {
+        val servidor = embeddedServer(Netty, port = 7000 + id) {
             routing {
                 get("/") {
-                    call.respondText("Server $id log ${entries()}", ContentType.Text.Plain)
+                    call.respondText("Servidor $id log ${entradas()}", ContentType.Text.Plain)
                 }
                 get("/cmd/{command}") {
-                    appendCommand(call.parameters["command"]!!)
-                    call.respondText("Server $id log ${entries()}", ContentType.Text.Plain)
+                    anexarComando(call.parameters["command"]!!)
+                    call.respondText("Servidor $id log ${entradas()}", ContentType.Text.Plain)
                 }
             }
         }
-        server.start(wait = false)
+        servidor.start(wait = false)
     }
 
-    fun entries() =
-            log.entries().map { "${it.term}: ${it.command}"}
+    fun entradas() =
+            log.entradas().map { "${it.term}: ${it.command}"}
 
-
-    fun appendCommand(command: String): String {
+    fun anexarComando(comando: String): String {
         val logEntry = LogEntry.newBuilder()
-                .setTerm(currentTerm)
-                .setCommand(command)
+                .setTerm(termoAtual)
+                .setCommand(comando)
                 .build()
-        log.add(log.lastIndex, logEntry)
-        return command
+        log.adicionar(log.ultimoIndex, logEntry)
+        return comando
     }
 
-     private fun appendRequestAndLeaderHeartbeat() {
-        kLogger.info { "Leader elected $id" }
+     private fun anexarPedidoEstadoDoLider() {
+        kLogger.info { "Lider eleito $id" }
 
-        val nextIndex = Array(servers.size) { _ -> commitIndex + 1 }
-        val matchIndex = Array(servers.size) { _ -> 0 }
+        val proximoIndex = Array(servidores.size) { _ -> commitIndex + 1 }
+        val indexDePartida = Array(servidores.size) { _ -> 0 }
 
         fixedRateTimer(period = 2000) {
             runBlocking {
-            if (state == FOLLOWER) cancel()
+            if (estado == Estados.SEGUIDOR) cancel()
 
-            println(nextIndex.toList())
-            println(matchIndex.toList())
+            println(proximoIndex.toList())
+            println(indexDePartida.toList())
 
-            servers.forEach {
+            servidores.forEach {
                 launch {
                     try {
-                        val entries = mutableListOf<LogEntry>()
-                        val i = nextIndex[it.id - 1]
-                        val prevLogIndex = i - 2
-                        val prevLogTerm = if (prevLogIndex >= 0) log.get(prevLogIndex).term else -1
+                        val entradas = mutableListOf<LogEntry>()
+                        val i = proximoIndex[it.id - 1]
+                        val indexLogAnterior = i - 2
+                        val termoLogAnterior = if (indexLogAnterior >= 0) log.recuperar(indexLogAnterior).term else -1
 
-                        if (log.lastIndex >= nextIndex[it.id - 1]) {
-                            entries.add(log.get(i - 1))
+                        if (log.ultimoIndex >= proximoIndex[it.id - 1]) {
+                            entradas.add(log.recuperar(i - 1))
                         }
 
-                        println("Append id: ${it.id} currentTerm: ${currentTerm} " +
-                                    "prevLogIndex ${prevLogIndex} prevLogTerm ${prevLogTerm} entries ${entries} commitIndex ${commitIndex}")
+                        println("Anexo id: ${it.id} termo atual: ${termoAtual} " +
+                                    "Index do log anterior ${indexLogAnterior} Log anterior ${termoLogAnterior} entradas ${entradas} indice do commit ${commitIndex}")
 
-                        val response = it.append(
-                                leaderId = id,
-                                term = currentTerm,
-                                prevLogIndex = prevLogIndex,
-                                prevLogTerm = prevLogTerm,
-                                entries = entries,
-                                leaderCommit = commitIndex)
+                        val response = it.anexar(
+                                idLider = id,
+                                termo = termoAtual,
+                                indexLogAnterior = indexLogAnterior,
+                                termoLogAnterior = termoLogAnterior,
+                                entradas = entradas,
+                                liderCompromisso = commitIndex)
 
 
-                        if (response.term > currentTerm) {
-                            currentTerm = response.term
-                            state = FOLLOWER
+                        if (response.term > termoAtual) {
+                            termoAtual = response.term
+                            estado = Estados.SEGUIDOR
                             kLogger.info {
-                                "Server $id is converted to $state at term $currentTerm"
+                                "Servidor $id convertido em $estado no termo $termoAtual"
                             }
-                            launch { channel.offer(state) }
+                            launch { canal.offer(estado) }
                             return@launch
                         }
 
                         if (response.success) {
-                            if (entries.size > 0) {
-                                nextIndex[it.id - 1] += 1
-                                matchIndex[it.id - 1] += 1
+                            if (entradas.size > 0) {
+                                proximoIndex[it.id - 1] += 1
+                                indexDePartida[it.id - 1] += 1
 
-                                val count = matchIndex.filter { it > commitIndex }.count()
-                                if (count >= majority) commitIndex += 1
+                                val count = indexDePartida.filter { it > commitIndex }.count()
+                                if (count >= maioria) commitIndex += 1
                             } else {
-                                matchIndex[it.id - 1] = prevLogIndex + 1
+                                indexDePartida[it.id - 1] = indexLogAnterior + 1
                             }
                         } else {
-                                nextIndex[it.id - 1] -= 1
+                                proximoIndex[it.id - 1] -= 1
                         }
 
                     } catch (e: Exception) {
-                        kLogger.info { "Server ${it.id} ${e.message}" }
+                        kLogger.info { "Servidor ${it.id} ${e.message}" }
                     }
                 }
             }
@@ -166,74 +164,74 @@ class RaftServer(val id: Int, val servers: List<RaftClient>) :
 
     }
 
-    private fun waitingForHeartbeatFromLeaderTimer() =
-            ResettableCountdownTimer {
-                state = CANDIDATE
-                kLogger.info { "Server $id is in $state at term $currentTerm" }
-                channel.offer(state)
+    private fun aguardandoEstadoDoLider() =
+        TemporizadorContagemRegressivaReinicializavel {
+                estado = Estados.CANDIDATO
+                kLogger.info { "Servidor $id é dentro $estado no termo $termoAtual" }
+                canal.offer(estado)
             }
 
-    private suspend fun leaderElection() {
+    private suspend fun eleicaoLider() {
 
-        val electionTimeout = 25L
+        val tempoLimiteEleicao = 25L
 
-        while (state == CANDIDATE) {
-            currentTerm += 1
-            votedFor = id
-            val votesGranted = AtomicInteger()
-            kLogger.info { "term: $currentTerm" }
-            val countDownLatch = CountDownLatch(majority)
+        while (estado == Estados.CANDIDATO) {
+            termoAtual += 1
+            votadoEm = id
+            val votosConcedidos = AtomicInteger()
+            kLogger.info { "termo: $termoAtual" }
+            val contagemRegressivaTrava = CountDownLatch(maioria)
             coroutineScope {
-                servers.forEach {
+                servidores.forEach {
                     launch {
-                        val responseVote = retry {
-                            val lastIndex = log.lastIndex
-                            val lastTerm = if (lastIndex == 0) 0 else log.get(log.lastIndex - 1).term
-                            it.vote(
-                                    currentTerm,
+                        val responseVote = tentarNovamente {
+                            val lastIndex = log.ultimoIndex
+                            val lastTerm = if (lastIndex == 0) 0 else log.recuperar(log.ultimoIndex - 1).term
+                            it.voto(
+                                    termoAtual,
                                     id,
                                     lastIndex,
                                     lastTerm)
                         }
-                        countDownLatch.countDown()
-                        if (currentTerm < responseVote.term) state = FOLLOWER
-                        if (responseVote.voteGranted) votesGranted.incrementAndGet()
+                        contagemRegressivaTrava.countDown()
+                        if (termoAtual < responseVote.term) estado = Estados.SEGUIDOR
+                        if (responseVote.voteGranted) votosConcedidos.incrementAndGet()
                     }
                 }
-                countDownLatch.await(electionTimeout, TimeUnit.SECONDS)
+                contagemRegressivaTrava.await(tempoLimiteEleicao, TimeUnit.SECONDS)
                 coroutineContext.cancelChildren()
             }
 
-            if (state == CANDIDATE && votesGranted.get() >= majority)
-                state = LEADER
-            else if (state == CANDIDATE)
+            if (estado == Estados.CANDIDATO && votosConcedidos.get() >= maioria)
+                estado = Estados.LIDER
+            else if (estado == Estados.CANDIDATO)
                 delay((2_000..3_000).random().toLong())
-            kLogger.info { "Server $id is $state at term $currentTerm votes ${votesGranted.get()}" }
+            kLogger.info { "Servidor $id está $estado no termo $termoAtual votos ${votosConcedidos.get()}" }
         }
 
-        launch { channel.send(state) }
+        launch { canal.send(estado) }
     }
 
     override suspend fun vote(request: RequestVoteRPC): ResponseVoteRPC {
-        val granted = if (request.term < currentTerm) false
-        else if (currentTerm == request.term) votedFor == request.candidateId
+        val granted = if (request.term < termoAtual) false
+        else if (termoAtual == request.term) votadoEm == request.candidateId
         else {
-            if (log.lastIndex >= 1 &&
-                    request.lastLogTerm < log.get(log.lastIndex - 1).term) false
-            else if (log.lastIndex >= 1 &&
-                    request.lastLogTerm == log.get(log.lastIndex - 1).term &&
-                    request.lastLogIndex < log.lastIndex) false
+            if (log.ultimoIndex >= 1 &&
+                    request.lastLogTerm < log.recuperar(log.ultimoIndex - 1).term) false
+            else if (log.ultimoIndex >= 1 &&
+                    request.lastLogTerm == log.recuperar(log.ultimoIndex - 1).term &&
+                    request.lastLogIndex < log.ultimoIndex) false
             else {
-                currentTerm = request.term
-                votedFor = request.candidateId
-                state = FOLLOWER
-                launch { channel.send(state) }
+                termoAtual = request.term
+                votadoEm = request.candidateId
+                estado = Estados.SEGUIDOR
+                launch { canal.send(estado) }
                 true
             }
         }
 
         return ResponseVoteRPC.newBuilder()
-                    .setTerm(currentTerm)
+                    .setTerm(termoAtual)
                     .setVoteGranted(granted)
                     .build()
 
@@ -241,59 +239,60 @@ class RaftServer(val id: Int, val servers: List<RaftClient>) :
 
     override suspend fun append(request: RequestAppendEntriesRPC):
             ResponseAppendEntriesRPC {
-        kLogger.info { "leader heartbeat: ${request.leaderId} term: ${request.term}" }
+        kLogger.info { "Lider propagação de dados: ${request.leaderId} termo: ${request.term}" }
 
-        if (request.term > currentTerm) {
-            currentTerm = request.term
-            votedFor = -1
-            state = FOLLOWER
-            launch {  channel.send(state) }
+        if (request.term > termoAtual) {
+            termoAtual = request.term
+            votadoEm = -1
+            estado = Estados.SEGUIDOR
+            launch {  canal.send(estado) }
         }
 
         if (request.leaderId != id) {
-            state = FOLLOWER
-            launch {  channel.send(state) }
+            estado = Estados.SEGUIDOR
+            launch {  canal.send(estado) }
 
         }
 
         if (request.leaderCommit > commitIndex) {
-            commitIndex = minOf(request.leaderCommit, log.lastIndex)
+            commitIndex = minOf(request.leaderCommit, log.ultimoIndex)
         }
 
         val success = request.prevLogIndex == -1 ||
-                (log.lastIndex > request.prevLogIndex &&
-                log.get(request.prevLogIndex).term == request.prevLogTerm)
+                (log.ultimoIndex > request.prevLogIndex &&
+                log.recuperar(request.prevLogIndex).term == request.prevLogTerm)
 
-        if (success && request.entriesCount > 0) log.add(request.prevLogIndex + 1, request.getEntries(0))
+        if (success && request.entriesCount > 0) log.adicionar(request.prevLogIndex + 1, request.getEntries(0))
 
-        kLogger.info { "State: term ${currentTerm} commitIndex $commitIndex " }
+        kLogger.info { "Estado: termo ${termoAtual} ordemDeEnvio: $commitIndex " }
 
         return ResponseAppendEntriesRPC.newBuilder()
-                    .setTerm(currentTerm)
+                    .setTerm(termoAtual)
                     .setSuccess(success)
                     .build()
 
     }
 }
 
-private fun raftInstance(id: Int, port: Int, servers: List<RaftClient>) {
-    val log = KotlinLogging.logger("server")
+private fun raftInstance(id: Int, porta: Int, servidores: List<RaftClient>) {
+    val log = KotlinLogging.logger("servidor")
 
-    log.info { "Start server $id at $port" }
+    log.info { "Iniciando servidor $id na $porta" }
 
-    ServerBuilder.forPort(port)
-            .addService(RaftServer(id, servers))
+    ServerBuilder.forPort(porta)
+            .addService(RaftServer(id, servidores))
             .build()
             .start()
             .awaitTermination()
 }
 
 fun main(args: Array<String>) {
-    val raftClient1 = RaftClient(port = 8081, id = 1)
-    val raftClient2 = RaftClient(port = 8082, id = 2)
-    val raftClient3 = RaftClient(port = 8083, id = 3)
+    val raftClient1 = RaftClient(porta = 8081, id = 1)
+    val raftClient2 = RaftClient(porta = 8082, id = 2)
+    val raftClient3 = RaftClient(porta = 8083, id = 3)
 
-    val servers = listOf(raftClient1, raftClient2, raftClient3)
+    val servidores = listOf(raftClient1, raftClient2, raftClient3)
 
-    raftInstance(id = 2, port = 8082, servers = servers)
+
+    raftInstance(id = 3, porta = 8083, servidores = servidores)
 }

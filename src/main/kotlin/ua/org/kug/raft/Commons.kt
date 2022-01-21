@@ -7,20 +7,20 @@ import mu.KotlinLogging
 import java.util.*
 import kotlin.concurrent.schedule
 
-class ResettableCountdownTimer(private val action: suspend () -> Unit) {
+class TemporizadorContagemRegressivaReinicializavel(private val action: suspend () -> Unit) {
 
-    private val log = KotlinLogging.logger("timer")
+    private val log = KotlinLogging.logger("Cronometro")
 
-    private var timer = startTimer()
+    private var cronometro = iniciarCronometro()
 
-    fun reset() {
-        log.info { "Timer reseated" }
-        timer.cancel()
-        timer = startTimer()
+    fun resetar() {
+        log.info { "Cronometro reiniciado" }
+        cronometro.cancel()
+        cronometro = iniciarCronometro()
     }
 
-    private fun startTimer(): Timer {
-        val time = (20_000..23_000).random().toLong()
+    private fun iniciarCronometro(): Timer {
+        val time = (20_000..23_000).aleatorio().toLong()
         val newTimer = Timer()
         newTimer.schedule(time) {
             runBlocking { action() }
@@ -29,11 +29,11 @@ class ResettableCountdownTimer(private val action: suspend () -> Unit) {
     }
 }
 
-fun ClosedRange<Int>.random() =
+fun ClosedRange<Int>.aleatorio() =
         Random().nextInt((endInclusive + 1) - start) + start
 
 
-suspend fun <T> retry(delay: Long = 5000, block: suspend () -> T): T {
+suspend fun <T> tentarNovamente(delay: Long = 5000, block: suspend () -> T): T {
     while (true) {
         try {
             return block()
@@ -46,34 +46,34 @@ suspend fun <T> retry(delay: Long = 5000, block: suspend () -> T): T {
 
 class Log<T> {
 
-    var lastIndex = 0
+    var ultimoIndex = 0
 
     private val log = mutableListOf<T>()
 
-    fun get(i: Int): T =
-            if (lastIndex - 1 < i) throw IndexOutOfBoundsException() else log[i]
+    fun recuperar(i: Int): T =
+            if (ultimoIndex - 1 < i) throw IndexOutOfBoundsException() else log[i]
 
-    fun add(i: Int, entry: T) =
+    fun adicionar(i: Int, entry: T) =
          when {
-            lastIndex == i -> {
-                lastIndex += 1
+             ultimoIndex == i -> {
+                 ultimoIndex += 1
                 log.add(entry)
             }
-            lastIndex < i -> false
+             ultimoIndex < i -> false
             else -> {
                 log[i] = entry
-                lastIndex = i + 1
+                ultimoIndex = i + 1
                 true
             }
         }
 
-    fun entries() = log.subList(0, lastIndex)
+    fun entradas() = log.subList(0, ultimoIndex)
 }
 
 fun main(args: Array<String>) = runBlocking {
 
     withTimeout(10L) {
         delay(15)
-        print("hi")
+        print("Oi")
     }
 }

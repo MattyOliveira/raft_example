@@ -4,53 +4,53 @@ import io.grpc.ManagedChannelBuilder
 import kotlinx.coroutines.experimental.runBlocking
 import mu.KotlinLogging
 
-class RaftClient(val host: String = "localhost", val port: Int, val id: Int) {
+class RaftClient(val host: String = "localhost", val porta: Int, val id: Int) {
 
-    val log = KotlinLogging.logger("client")
+    val log = KotlinLogging.logger("Cliente")
 
     val raft = raftInstance()
 
     private fun raftInstance(): RaftGrpcKt.RaftKtStub {
-        val server = ManagedChannelBuilder.forAddress(host, port)
+        val servidor = ManagedChannelBuilder.forAddress(host, porta)
                 .usePlaintext()
                 .build()
 
-        val raftClient = RaftGrpcKt.newStub(server)
-        log.info { "Connecting port: $port" }
-        return raftClient
+        val raftCliente = RaftGrpcKt.newStub(servidor)
+        log.info { "Conectando porta: $porta" }
+        return raftCliente
     }
 
-    suspend fun vote(term: Int,
-                            candidateId: Int,
-                            lastLogIndex: Int,
-                            lastLogTerm: Int): ResponseVoteRPC {
-        log.info { "Call vote - host: $host, port: $port, candidateId: $candidateId, term: $term" }
+    suspend fun voto(termo: Int,
+                            idCandidato: Int,
+                            idUltimoLog: Int,
+                            ultimoTermoLog: Int): ResponseVoteRPC {
+        log.info { "Chamar votação - host: $host, porta: $porta, IdCandidato: $idCandidato, termo: $termo" }
         return raft.vote(
                 RequestVoteRPC.newBuilder()
-                        .setTerm(term)
-                        .setCandidateId(candidateId)
-                        .setLastLogIndex(lastLogIndex)
-                        .setLastLogTerm(lastLogTerm)
+                        .setTerm(termo)
+                        .setCandidateId(idCandidato)
+                        .setLastLogIndex(idUltimoLog)
+                        .setLastLogTerm(ultimoTermoLog)
                         .build()
         )
     }
 
-    suspend fun append(
-            leaderId: Int,
-            term: Int,
-            prevLogIndex: Int,
-            prevLogTerm: Int,
-            entries: List<RequestAppendEntriesRPC.LogEntry>,
-            leaderCommit: Int):
-            ResponseAppendEntriesRPC {
-        log.info { "Call append - host: $host, port: $port, term: $term" }
+    suspend fun anexar(
+            idLider: Int,
+            termo: Int,
+            indexLogAnterior: Int,
+            termoLogAnterior: Int,
+            entradas: List<RequestAppendEntriesRPC.LogEntry>,
+            liderCompromisso: Int
+    ): ResponseAppendEntriesRPC {
+        log.info { "Anexo da chamada - host: $host, porta: $porta, termo: $termo" }
         return raft.append(RequestAppendEntriesRPC.newBuilder()
-                .setTerm(term)
-                .setLeaderId(leaderId)
-                .setPrevLogIndex(prevLogIndex)
-                .setPrevLogTerm(prevLogTerm)
-                .addAllEntries(entries)
-                .setLeaderCommit(leaderCommit)
+                .setTerm(termo)
+                .setLeaderId(idLider)
+                .setPrevLogIndex(indexLogAnterior)
+                .setPrevLogTerm(termoLogAnterior)
+                .addAllEntries(entradas)
+                .setLeaderCommit(liderCompromisso)
                 .build()
         )
     }
